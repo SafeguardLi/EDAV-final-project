@@ -1,0 +1,181 @@
+---
+title: "Vehicle Collision"
+author: "Wangzhi Ll"
+date: "11/15/2019"
+output: html_document
+---
+
+## Setup and Load Data
+
+
+```{r setup}
+library(tidyverse)
+library(extracat)
+library(mapdeck)
+library(plotly)
+library(ggmap)
+Sys.setenv("plotly_username"="SafeguardLi")
+Sys.setenv("plotly_api_key"="JDJpqet5WWuBC3kDQaQc")
+```
+
+```{r loaddata}
+data <- read.csv("Motor_Vehicle_Collisions_-_Crashes.csv", header=T, na.strings=c("","NA"))
+data_20172018 = data[substr(data$ACCIDENT.DATE,7,10)=='2017'|substr(data$ACCIDENT.DATE,7,10)=='2018',]
+crash <- data_20172018%>%select(COLLISION_ID, ACCIDENT.DATE, ACCIDENT.TIME, lat = LATITUDE, lon = LONGITUDE, LOCATION, ON.STREET.NAME, OFF.STREET.NAME, NUMBER.OF.PERSONS.INJURED, NUMBER.OF.PERSONS.KILLED, NUMBER.OF.PEDESTRIANS.INJURED, NUMBER.OF.PEDESTRIANS.KILLED, NUMBER.OF.CYCLIST.INJURED, NUMBER.OF.CYCLIST.KILLED, NUMBER.OF.MOTORIST.INJURED, NUMBER.OF.MOTORIST.KILLED)
+crash$ACCIDENT.DATE <- as.Date(crash$ACCIDENT.DATE, "%m/%d/%Y")
+crash <- crash%>%mutate(victims = NUMBER.OF.PERSONS.INJURED+NUMBER.OF.PERSONS.KILLED, date = paste(as.character(ACCIDENT.DATE),as.character(ACCIDENT.TIME)))
+head(crash)
+#crash$ACCIDENT.TIME <- as.character(crash$ACCIDENT.TIME)
+crash$date <- as.POSIXct(crash$date, "%Y-%m-%d %H:%M", tz = "GMT")
+crash <- crash[order(crash$date),]
+crash$ON.STREET.NAME <- as.character(crash$ON.STREET.NAME)
+crash$OFF.STREET.NAME <- as.character(crash$OFF.STREET.NAME)
+head(crash)
+```
+
+
+## EDA 
+
+### Missing Value
+```{r missing}
+visna(crash, sort = "b")
+missingLOC <- sum(is.na(crash$LOCATION))/nrow(crash)
+fillingSTR <- sum(!is.na(crash$ON.STREET.NAME)&is.na(crash$LOCATION))/nrow(crash)
+print(missingLOC - fillingSTR)
+```
+
+```
+data$ACCIDENT.DATE<- as.Date(data$ACCIDENT.DATE, "%m/%d/%Y")
+range(data$ACCIDENT.DATE)
+class(data$ACCIDENT.DATE)
+data2 <- data[data$ACCIDENT.TIME >= "2017-01-01" & data$ACCIDENT.TIME <="2019-01-01",]
+```
+
+```{r accident number}
+date <- as.data.frame(summary(data$ACCIDENT.DATE))
+date$date <- rownames(date)
+date$date <- as.character(date$date)
+date$date <- as.Date(date$date, "%m/%d/%Y")
+date2 <- date[order(date$date),]
+ggplot(data = date, aes(y = `summary(data$ACCIDENT.DATE)`, x = date))+geom_point()
+```
+more accidents happens in 2017-2019 than 2014-2017
+
+```{r cartype}
+summary(data$VEHICLE.TYPE.CODE.1)
+```
+SUV has the most number of accidents (this could be explained by the number of SUV in New York);
+There are duplicated names in levels(e.g. suv, taxi);
+
+```{r borough}
+summary(data$BOROUGH)
+```
+bronx has way more car accidents than other districts.
+
+```{r reason}
+summary(data$CONTRIBUTING.FACTOR.VEHICLE.1)
+```
+
+## Geographical Analysis
+
+### Mapdeck 
+
+```{r example}
+set_token(Sys.getenv("MAPBOX"))
+crash_data = read.csv("https://git.io/geocompr-mapdeck")
+crash_data = na.omit(crash_data)
+ms = mapdeck_style("dark")
+mapdeck(style = ms, pitch = 45, location = c(0, 52), zoom = 4) %>%
+add_grid(data = crash_data, lat = "lat", lon = "lng", cell_size = 1000,
+         elevation_scale = 50, layer_id = "grid_layer",
+         colour_range = viridisLite::plasma(6))
+head(crash_data)
+```
+
+```{r mapdeck}
+NYCcrash = data_20172018%>%select("lng" = "LONGITUDE","lat"="LATITUDE")
+NYCcrash = na.omit(NYCcrash)
+key <- "pk.eyJ1IjoiZ2VvcmdlbGVlMjAxOSIsImEiOiJjazMyZTV1Z3UwajMwM21wbXFpbjdjN2E1In0.FxeN5dw--xCWmVSwMDH4BA"
+mapdeck(token = key, style = 'dark',pitch = 45, location = c(0,52), zoom = 4)%>%
+  add_grid(data = NYCcrash, lat = 'lat', lon = 'lng',cell_size = 500, elevation_scale = 100, layer_id = "grid_layer2", colour_range = viridisLite::plasma(6))
+```
+
+```{r example2}
+df <- read.csv(paste0(
+'https://raw.githubusercontent.com/uber-common/deck.gl-data/master/',
+'examples/3d-heatmap/heatmap-data.csv'
+))
+
+mapdeck( token = key, style = mapdeck_style("dark"), pitch = 45 ) %>%
+add_grid(
+  data = df
+  , lat = "lat"
+  , lon = "lng"
+  , cell_size = 5000
+  , elevation_scale = 50
+  , layer_id = "grid_layer"
+)
+```
+
+### Plotly
+
+```{r plotly_example}
+token <- "pk.eyJ1IjoiZ2VvcmdlbGVlMjAxOSIsImEiOiJjazMyZTV1Z3UwajMwM21wbXFpbjdjN2E1In0.FxeN5dw--xCWmVSwMDH4BA"
+us_cities = read.csv("https://raw.githubusercontent.com/plotly/datasets/master/us-cities-top-1k.csv")
+
+p <- us_cities %>%
+  plot_ly(
+    lat = ~lat,
+    lon = ~lon,
+    marker = list(color = "fuchsia"),
+    type = 'scattermapbox',
+    hovertext = us_cities[,"City"]) %>%
+  layout(
+    mapbox = list(
+      style = 'dark',
+      accesstoken = token,
+      zoom =2.5,
+      center = list(lon = -88, lat = 34)))
+#chart_link = api_create(p, filename="dark-tile",username = "SafeguardLi")
+#chart_link
+p
+```
+
+```{r crashdata}
+token <- "pk.eyJ1IjoiZ2VvcmdlbGVlMjAxOSIsImEiOiJjazMyZTV1Z3UwajMwM21wbXFpbjdjN2E1In0.FxeN5dw--xCWmVSwMDH4BA"
+
+p <- crash[1:100000,] %>%
+  plot_ly(
+    lat = ~lat,
+    lon = ~lon,
+    type = 'densitymapbox',
+    coloraxis = 'coloraxis',
+    #hovertext = crash[,"victims"],
+    radius = 10,
+    zauto = TRUE,
+    opacity = 0.5) %>%
+  layout(
+    mapbox = list(
+      style = 'dark',
+      accesstoken = token,
+      zoom =10,
+      center = list(lat = 40.712, lon = -74.00)),
+    coloraxis = list(colorscale = "Viridis"))
+p
+```
+
+```{r ggmap example}
+# load the data
+tartu_housing <- read.csv("data/tartu_housing_xy_wgs84_a.csv", sep = ";")
+ 
+# Download the base map
+tartu_map_g_str <- get_map(location = "tartu", zoom = 13, source = "osm")
+# Draw the heat map
+ggmap(tartu_map_g_str, extent = "device") + geom_density2d(data = tartu_housing, aes(x = lon, y = lat), size = 0.3) + 
+  stat_density2d(data = tartu_housing, 
+                 aes(x = lon, y = lat, fill = ..level.., alpha = ..level..), size = 0.01, 
+                 bins = 16, geom = "polygon") + scale_fill_gradient(low = "green", high = "red") + 
+  scale_alpha(range = c(0, 0.3), guide = FALSE)
+```
+
+
