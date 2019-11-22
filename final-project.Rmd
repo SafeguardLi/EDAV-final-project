@@ -7,13 +7,15 @@ output: html_document
 
 ## Setup and Load Data
 
-
 ```{r setup}
 library(tidyverse)
-library(extracat)
+#library(extracat)
 library(mapdeck)
 library(plotly)
 library(ggmap)
+library(sf)
+library(tmap)
+library(leaflet)
 Sys.setenv("plotly_username"="SafeguardLi")
 Sys.setenv("plotly_api_key"="JDJpqet5WWuBC3kDQaQc")
 ```
@@ -22,17 +24,46 @@ Sys.setenv("plotly_api_key"="JDJpqet5WWuBC3kDQaQc")
 data <- read.csv("Motor_Vehicle_Collisions_-_Crashes.csv", header=T, na.strings=c("","NA"))
 data_20172018 = data[substr(data$ACCIDENT.DATE,7,10)=='2017'|substr(data$ACCIDENT.DATE,7,10)=='2018',]
 crash <- data_20172018%>%select(COLLISION_ID, ACCIDENT.DATE, ACCIDENT.TIME, lat = LATITUDE, lon = LONGITUDE, LOCATION, ON.STREET.NAME, OFF.STREET.NAME, NUMBER.OF.PERSONS.INJURED, NUMBER.OF.PERSONS.KILLED, NUMBER.OF.PEDESTRIANS.INJURED, NUMBER.OF.PEDESTRIANS.KILLED, NUMBER.OF.CYCLIST.INJURED, NUMBER.OF.CYCLIST.KILLED, NUMBER.OF.MOTORIST.INJURED, NUMBER.OF.MOTORIST.KILLED)
+
 crash$ACCIDENT.DATE <- as.Date(crash$ACCIDENT.DATE, "%m/%d/%Y")
+
 crash <- crash%>%mutate(victims = NUMBER.OF.PERSONS.INJURED+NUMBER.OF.PERSONS.KILLED, date = paste(as.character(ACCIDENT.DATE),as.character(ACCIDENT.TIME)))
-head(crash)
-#crash$ACCIDENT.TIME <- as.character(crash$ACCIDENT.TIME)
 crash$date <- as.POSIXct(crash$date, "%Y-%m-%d %H:%M", tz = "GMT")
 crash <- crash[order(crash$date),]
 crash$ON.STREET.NAME <- as.character(crash$ON.STREET.NAME)
 crash$OFF.STREET.NAME <- as.character(crash$OFF.STREET.NAME)
-head(crash)
+
+# sf
+sf <- sf::st_as_sf( crash[!is.na(crash$lat),], coords = c("lon", "lat"))
+attr( sf[["geometry"]], "bbox") <- c(xmin = -74.257159, ymin = 40.495992, xmax = -73.699215,ymax= 40.915568)
+sf <- sf::st_as_sf( crash[!is.na(crash$lat),], coords = c("lon", "lat"))
 ```
 
+```{r write_sf}
+t1 = Sys.time()
+victim <- crash
+victim <- victim[which(victim$victims != 0),]
+victim_dist <- victim[which(victim$victims == 1),]
+max(victim$victims)
+for(i in 2:max(victim$victims)){
+  temp = victim[which(victim$victims == i),]
+  if(dim(temp)[1]!=0){
+    for(j in 1:i){
+      victim_dist <- rbind(victim_dist, temp)
+      print(paste("i:",i,"_j:",j,"_",dim(victim_dist)))
+  }  
+  }
+}
+print(paste("Time Use:",Sys.time()-t1))
+write_csv(victim_dist,gsub(" ","",paste(getwd(),"/victim.csv")))
+```
+
+
+```{r read_sf}
+victim_dist <- read_csv(gsub(" ","",paste(getwd(),"/victim.csv")))
+victim_dist <- sf::st_as_sf(victim_dist[!is.na(victim_dist$lat),], coords = c("lon", "lat"))
+attr(victim_dist[["geometry"]], "bbox") <- c(xmin = -74.257159, ymin = 40.495992, xmax = -73.699215,ymax= 40.915568)
+```
 
 ## EDA 
 
@@ -44,12 +75,6 @@ fillingSTR <- sum(!is.na(crash$ON.STREET.NAME)&is.na(crash$LOCATION))/nrow(crash
 print(missingLOC - fillingSTR)
 ```
 
-```
-data$ACCIDENT.DATE<- as.Date(data$ACCIDENT.DATE, "%m/%d/%Y")
-range(data$ACCIDENT.DATE)
-class(data$ACCIDENT.DATE)
-data2 <- data[data$ACCIDENT.TIME >= "2017-01-01" & data$ACCIDENT.TIME <="2019-01-01",]
-```
 
 ```{r accident number}
 date <- as.data.frame(summary(data$ACCIDENT.DATE))
@@ -164,6 +189,37 @@ p <- crash[1:100000,] %>%
 p
 ```
 
+```{r}
+?map_data
+p <- plot_ly(
+    lat = ~lat,
+    lon = ~lon,
+    type = 'densitymapbox',
+    coloraxis = 'coloraxis',
+    #hovertext = crash[,"victims"],
+    radius = 10,
+    zauto = TRUE,
+    opacity = 0.5)%>%
+  add_markers(
+    x = ~lon, 
+    y = ~lat, 
+    size = ~pop, 
+    color = ~q, 
+    hoverinfo = "text",
+    text = ~paste(df$name, "<br />", df$pop/1e6, " million")
+  )%>%layout(mapbox = list(
+      style = 'dark',
+      accesstoken = token,
+      zoom =10,
+      center = list(lat = 40.712, lon = -74.00)),
+    coloraxis = list(colorscale = "Viridis"))
+p
+
+```
+
+
+### GGmap
+
 ```{r ggmap example}
 # load the data
 tartu_housing <- read.csv("data/tartu_housing_xy_wgs84_a.csv", sep = ";")
@@ -178,4 +234,93 @@ ggmap(tartu_map_g_str, extent = "device") + geom_density2d(data = tartu_housing,
   scale_alpha(range = c(0, 0.3), guide = FALSE)
 ```
 
+### Mapdeck
+
+```{r mapdeck}
+key <- "pk.eyJ1IjoiZ2VvcmdlbGVlMjAxOSIsImEiOiJjazMyZTV1Z3UwajMwM21wbXFpbjdjN2E1In0.FxeN5dw--xCWmVSwMDH4BA"
+mapdeck(token  = key, style = mapdeck_style('dark'), pitch =45,zoom = 100)%>%add_screengrid(
+  data = sf
+  , weight = "weight"
+  , cell_size = 15
+  , layer_id = "gridscreen_layer"
+  , opacity = 0.5
+)
+```
+
+```{r test}
+mapdeck(token  = key, style = mapdeck_style('dark'), pitch =45,zoom = 100)%>%add_hexagon(data = victim_dist,
+              lat = "lat", 
+              lon = "lon",
+              focus_layer = TRUE,
+              elevation_scale = 10,#sf$victims, 
+              layer_id = "heatmap_layer", 
+              radius = 300, 
+              colour_range = colourvalues::colour_values(1:6, palette = colourvalues::get_palette("viridis")[70:256,]))
+  
+```
+
+```
+add_grid(
+  data = victim_dist
+  , cell_size = 300
+  , elevation_scale = 2
+  , layer_id = "grid_layer"
+  , auto_highlight = TRUE
+)
+
+add_screengrid(
+  data = sf
+  , weight = "weight"
+  , cell_size = 15
+  , layer_id = "grid_layer"
+)
+
+add_hexagon(data = sf,
+              lat = "lat", 
+              lon = "lon",
+              focus_layer = TRUE,
+              elevation_scale = 10,#sf$victims, 
+              layer_id = "heatmap_layer", 
+              radius = 500, 
+              colour_range = colourvalues::colour_values(1:6, palette = colourvalues::get_palette("viridis")[70:256,]))
+
+## need hover info
+
+## need to tune radius automatically
+
+## could reflect info like injuries and dealth.
+
+## Show how the plot changes as time, victims, or season changes.
+
+## We need SHINY!!
+?add_hexagon
+```
+
+- SHINY
+
+- use map to show injuries distribution
+
+- use map to show contributed factior distribution
+
+- use map to show accident distribution at different time and seasons
+
+- 
+
+### tmap
+
+```{r bubbleplot}
+#tmap_mode("plot")
+#tm1 <- tm_shape(sf[1000,]) + tm_bubbles(size = "victims")
+#tm1
+```
+
+### leaflet
+
+```{r test}
+?addCircleMarkers
+leaflet(sf[0:50,])%>%addTiles()%>%addCircleMarkers(
+    radius = sf$victims,
+    stroke = FALSE, fillOpacity = 0.5
+  )
+```
 
